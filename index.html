@@ -315,8 +315,26 @@ const pad = (n, l = 6) => String(Math.floor(n)).padStart(l, '0');
 
 // ------------------------------------------------------------------ audio (all original chiptune)
 const AU = { ctx: null, master: null, mus: null, fx: null, noise: null, muted: false };
+// A silent looping <audio> puts iOS into "playback" mode so Web Audio is heard even with the ring/silent switch on.
+function silentWav() {
+  const n = 800, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) b[o + i] = t.charCodeAt(i); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true); str(36, 'data'); v.setUint32(40, n, true);
+  b.fill(128, 44); let bin = ''; b.forEach(x => bin += String.fromCharCode(x));
+  return 'data:audio/wav;base64,' + btoa(bin);
+}
+let unlockEl = null;
+function unlockIOS() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  try {
+    if (!unlockEl) { unlockEl = new Audio(silentWav()); unlockEl.loop = true; unlockEl.setAttribute('playsinline', ''); }
+    if (unlockEl.paused) { const pr = unlockEl.play(); if (pr && pr.catch) pr.catch(() => {}); }
+  } catch (e) {}
+}
 function audioInit() {
-  if (AU.ctx) { if (AU.ctx.state === 'suspended') AU.ctx.resume().catch(() => {}); return; }
+  unlockIOS();
+  if (AU.ctx) { if (AU.ctx.state !== 'running' && !paused) AU.ctx.resume().catch(() => {}); return; }
   try {
     const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
     const a = new C(); AU.ctx = a;
@@ -426,9 +444,15 @@ function sched() {
   }
 }
 setInterval(sched, 25);
-let lastShotSfx = 0;
-function sfx(n) {
+let lastShotSfx = 0, lastHiss = 0;
+const VOICE = { fluke: [1300, 'square'], augie: [700, 'triangle'], ham: [900, 'square'], chew: [180, 'sawtooth'], anne: [1700, 'triangle'], q2: [2100, 'square'], artie: [0, 'square'], nader: [140, 'sawtooth'] };
+function voice(who) {
   if (!AU.ctx || AU.ctx.state !== 'running') return;
+  const [f, type] = VOICE[who] || [1600, 'square'], t = AU.ctx.currentTime;
+  tone(f ? f * rnd(0.9, 1.1) : rnd(800, 2400), t, 0.04, type, 0.035, AU.fx);
+}
+function sfx(n) {
+  if (!AU.ctx || paused) return;
   const t = AU.ctx.currentTime, F = AU.fx;
   switch (n) {
     case 'shoot': if (t - lastShotSfx < 0.09) return; lastShotSfx = t; tone(1400, t, 0.05, 'square', 0.03, F, 500); break;
@@ -440,6 +464,13 @@ function sfx(n) {
     case 'die': tone(700, t, 0.7, 'square', 0.09, F, 50); noise(t, 0.8, 0.35, 'lowpass', 1200, F); break;
     case 'alarm': for (let i = 0; i < 6; i++) tone(i % 2 ? 660 : 880, t + i * 0.22, 0.2, 'square', 0.06, F); break;
     case 'blip': tone(1600, t, 0.025, 'square', 0.025, F); break;
+    case 'coin': tone(988, t, 0.08, 'square', 0.09, F); tone(1319, t + 0.08, 0.35, 'square', 0.09, F); break;
+    case 'ding': tone(2093, t, 0.7, 'sine', 0.12, F); tone(4186, t, 0.4, 'sine', 0.04, F); tone(3136, t + 0.01, 0.5, 'triangle', 0.03, F); break;
+    case 'hiss': if (t - lastHiss < 0.25) return; lastHiss = t; noise(t, 0.28, 0.07, 'highpass', 3500, F); break;
+    case 'press': noise(t, 0.5, 0.18, 'bandpass', 2400, F, 0.6); tone(220, t, 0.4, 'square', 0.04, F, 110); break;
+    case 'growl': tone(95, t, 0.5, 'sawtooth', 0.09, F, 70); noise(t, 0.5, 0.12, 'lowpass', 500, F); break;
+    case 'whirr': tone(400, t, 0.25, 'square', 0.05, F, 1600); tone(1600, t + 0.25, 0.25, 'square', 0.04, F, 300); break;
+    case 'gogo': [523, 659, 784, 1047].forEach((f, i) => tone(f, t + i * 0.09, 0.12, 'square', 0.07, F)); tone(1047, t + 0.36, 0.4, 'triangle', 0.1, F); break;
     case 'absorb': tone(300, t, 0.12, 'sine', 0.12, F, 1200); break;
     case 'beam': tone(110, t, 0.5, 'sawtooth', 0.06, F, 220); break;
     case 'toast': tone(500, t, 0.08, 'square', 0.04, F, 1200); break;
@@ -507,7 +538,7 @@ const STAGE_NAME = ['', 'STEAM IRON BLOCKADE', 'THE TOASTER BELT', "DARPH NADER'
 const BOSS_WARN = ['', 'IMPERIAL STEAM IRON', 'TOASTER MOTHERSHIP', 'DARPH NADER'];
 
 // ------------------------------------------------------------------ state
-let S = 'title', T = 0, paused = false;
+let S = 'coin', T = 0, paused = false;
 let score = 0, hi = 20000, nextExtend = 30000, credits = 0;
 try { hi = Math.max(hi, +localStorage.getItem('hw-hi') || 0); } catch (e) {}
 function saveHi() { if (score > hi) hi = score; try { localStorage.setItem('hw-hi', String(hi)); } catch (e) {} }
@@ -524,7 +555,7 @@ function runScript(name) { script = SCRIPTS[name]; scriptI = 0; nextStep(); }
 function nextStep() {
   const s = script[scriptI++]; if (!s) return;
   if (s.t === 'crawl') { S = 'crawl'; crawlY = H + 8; if (trackName !== 'title') playMusic('title'); }
-  else if (s.t === 'say') { S = 'talk'; talk = { ...s, shown: 0, lines: wrapText(s.text, 21) }; if (s.music && trackName !== s.music) playMusic(s.music); if (s.who === 'nader') sfx('breath'); }
+  else if (s.t === 'say') { S = 'talk'; talk = { ...s, shown: 0, lines: wrapText(s.text, 21) }; if (s.music && trackName !== s.music) playMusic(s.music); if (s.who === 'nader') sfx('breath'); if (s.who === 'chew') sfx('growl'); if (s.who === 'artie') sfx('whirr'); }
   else if (s.t === 'stage') startStage(s.n);
   else if (s.t === 'win') { S = 'win'; saveHi(); playMusic('title'); }
 }
@@ -534,7 +565,7 @@ function startStage(n) {
   stg = { n, t: 0, len: [0, 36, 40, 32][n], next: 2.2, phase: 'waves', warn: 0, clear: 0 };
   P.x = W / 2; P.y = H - 46; P.alive = true; P.inv = 2;
   banner = { a: 'STAGE ' + n, b: STAGE_NAME[n], t: 2.6 };
-  playMusic('stage');
+  playMusic('stage'); sfx('gogo');
 }
 
 // ------------------------------------------------------------------ spawning
@@ -612,7 +643,7 @@ function update(dt) {
   floaters = floaters.filter(f => f.t < 1);
 
   if (S === 'crawl') { crawlY -= 13 * dt; if (crawlY + CRAWL.length * 14 < 36) nextStep(); }
-  else if (S === 'talk') { const before = Math.floor(talk.shown); talk.shown += dt * 38; if (Math.floor(talk.shown) !== before && Math.floor(talk.shown) % 3 === 0 && talk.shown < talk.text.length) sfx('blip'); }
+  else if (S === 'talk') { const before = Math.floor(talk.shown); talk.shown += dt * 38; if (Math.floor(talk.shown) !== before && Math.floor(talk.shown) % 3 === 0 && talk.shown < talk.text.length) voice(talk.who); }
   else if (S === 'over') { overT -= dt; if (overT <= 0) { saveHi(); toTitle(); } }
   else if (S === 'play' && !paused) updPlay(dt);
 }
@@ -674,8 +705,8 @@ function updPlay(dt) {
     if (e.y > 8 && e.y < H * 0.62 && P.alive && e.kind !== 'toast') {
       e.fire -= dt;
       if (e.fire <= 0) {
-        if (e.kind === 'iron') { aim(e.x, e.y + 7, 68 * sp, 'steam'); e.fire = rnd(1.8, 3) / sp; }
-        else { shot(e.x, e.y - 4, rnd(-30, 30), -75, 'toast', { g: 100 }); sfx('toast'); e.fire = rnd(2, 3.2) / sp; }
+        if (e.kind === 'iron') { aim(e.x, e.y + 7, 68 * sp, 'steam'); sfx('hiss'); e.fire = rnd(1.8, 3) / sp; }
+        else { shot(e.x, e.y - 4, rnd(-30, 30), -75, 'toast', { g: 100 }); sfx('ding'); e.fire = rnd(2, 3.2) / sp; }
       }
     }
     if (e.hp <= 0 && !e.dead) killEnemy(e);
@@ -733,13 +764,13 @@ function updBoss(dt) {
     b.atk++;
     if (n === 1) {
       const m = b.atk % 3;
-      if (m === 0) { fan(b.x, b.y + 24, 9, Math.PI / 2, 1.7, 62, 'steam'); b.atkT = 1.5 * enr; }
+      if (m === 0) { fan(b.x, b.y + 24, 9, Math.PI / 2, 1.7, 62, 'steam'); sfx('press'); b.atkT = 1.5 * enr; }
       else if (m === 1) { b.burst = 4; b.atkT = 1.4 * enr; }
       else { for (let i = 0; i < 5; i++) { shot(b.x - 22, b.y, rnd(-50, -10), rnd(30, 70), 'steam'); shot(b.x + 22, b.y, rnd(10, 50), rnd(30, 70), 'steam'); } b.atkT = 1.6 * enr; }
       if (enr < 1 && b.atk % 4 === 3) wIronDive();
     } else if (n === 2) {
       const m = b.atk % 3;
-      if (m === 0) { shot(b.x - 10, b.y - 8, rnd(-55, -20), -120, 'toast', { g: 110, burst: true }); shot(b.x + 10, b.y - 8, rnd(20, 55), -120, 'toast', { g: 110, burst: true }); sfx('toast'); b.atkT = 1.8 * enr; }
+      if (m === 0) { shot(b.x - 10, b.y - 8, rnd(-55, -20), -120, 'toast', { g: 110, burst: true }); shot(b.x + 10, b.y - 8, rnd(20, 55), -120, 'toast', { g: 110, burst: true }); sfx('ding'); b.atkT = 1.8 * enr; }
       else if (m === 1) { const a = Math.atan2(P.y - b.y, P.x - b.x); fan(b.x + 30, b.y, 5, a, 0.8, 80, 'crumb'); b.atkT = 1.3 * enr; }
       else { for (let i = 0; i < 6; i++) shot(rnd(10, W - 10), -10 - i * 14, rnd(-10, 10), rnd(55, 80), 'toast'); b.atkT = 1.7 * enr; }
       if (enr < 1 && b.atk % 5 === 4) wToastRain();
@@ -939,7 +970,7 @@ function drawTitle() {
   const row1 = ['fluke', 'augie', 'ham', 'chew'], row2 = ['anne', 'q2', 'artie'];
   row1.forEach((k, i) => drawSpr(k, 32 + i * 43, 210 + Math.sin(T * 3 + i) * 1.5, 2));
   row2.forEach((k, i) => drawSpr(k, 53 + i * 43, 248 + Math.sin(T * 3 + i + 2) * 1.5, 2));
-  if ((T * 2 | 0) % 2) txt('TAP TO START', W / 2, 278, '#f8d840', 'center');
+  if ((T * 2 | 0) % 2) txt(S === 'coin' ? 'TAP TO INSERT COIN' : 'TAP TO START', W / 2, 278, '#f8d840', 'center');
   txt('HI ' + pad(hi), W / 2, 296, '#e8283c', 'center');
   txt('A FAN-MADE TRIBUTE', W / 2, 316, '#4a5068', 'center');
   txt('CREDIT ' + credits, W / 2, 328, '#4a5068', 'center');
@@ -1002,7 +1033,7 @@ function drawWin() {
 }
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (S === 'title') drawTitle();
+  if (S === 'title' || S === 'coin') drawTitle();
   else if (S === 'crawl') drawCrawl();
   else if (S === 'talk') drawTalk();
   else if (S === 'play') drawPlay();
@@ -1016,7 +1047,8 @@ function draw() {
 
 // ------------------------------------------------------------------ input
 function tap() {
-  if (S === 'title') { credits = Math.max(credits, 1); newGame(); }
+  if (S === 'coin') { credits = 1; S = 'title'; sfx('coin'); playMusic('title'); }
+  else if (S === 'title') { credits = Math.max(credits, 1); newGame(); }
   else if (S === 'crawl') nextStep();
   else if (S === 'talk') { if (talk.shown < talk.text.length) talk.shown = talk.text.length; else nextStep(); }
   else if (S === 'over') { credits++; score = 0; nextExtend = 30000; Object.assign(P, { lives: 3, bombs: 2, alive: true, inv: 3, x: W / 2, y: H - 46, overT: 0 }); S = 'play'; playMusic(stg.phase === 'boss' ? (stg.n === 3 ? 'nader' : 'boss') : 'stage'); }
