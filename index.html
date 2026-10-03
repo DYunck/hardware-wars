@@ -972,7 +972,8 @@ function drawTitle() {
   row2.forEach((k, i) => drawSpr(k, 53 + i * 43, 248 + Math.sin(T * 3 + i + 2) * 1.5, 2));
   if ((T * 2 | 0) % 2) txt(S === 'coin' ? 'TAP TO INSERT COIN' : 'TAP TO START', W / 2, 278, '#f8d840', 'center');
   txt('HI ' + pad(hi), W / 2, 296, '#e8283c', 'center');
-  txt('A FAN-MADE TRIBUTE', W / 2, 316, '#4a5068', 'center');
+  const on = AU.ctx && AU.ctx.state === 'running' && !AU.muted;
+  txt(on ? 'SOUND ON' : AU.muted ? 'SOUND MUTED' : 'SOUND OFF - TAP', W / 2, 316, on ? '#6ee4fa' : '#e8283c', 'center');
   txt('CREDIT ' + credits, W / 2, 328, '#4a5068', 'center');
 }
 function drawCrawl() {
@@ -1047,7 +1048,7 @@ function draw() {
 
 // ------------------------------------------------------------------ input
 function tap() {
-  if (S === 'coin') { credits = 1; S = 'title'; sfx('coin'); playMusic('title'); }
+  if (S === 'coin') { credits = 1; S = 'title'; unlockAudio(); sfx('coin'); playMusic('title'); }
   else if (S === 'title') { credits = Math.max(credits, 1); newGame(); }
   else if (S === 'crawl') nextStep();
   else if (S === 'talk') { if (talk.shown < talk.text.length) talk.shown = talk.text.length; else nextStep(); }
@@ -1091,6 +1092,14 @@ addEventListener('keydown', e => {
   if (e.code.startsWith('Arrow')) e.preventDefault();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
+// iOS only unlocks audio on touchend/click, not on touchstart/pointerdown.
+function unlockAudio() {
+  audioInit();
+  const a = AU.ctx; if (!a) return;
+  if (a.state !== 'running' && !paused) a.resume().catch(() => {});
+  try { const src = a.createBufferSource(); src.buffer = a.createBuffer(1, 1, 22050); src.connect(a.destination); src.start(0); } catch (e) {}
+}
+['touchend', 'click', 'pointerup', 'keydown'].forEach(ev => document.addEventListener(ev, unlockAudio, { capture: true, passive: true }));
 document.addEventListener('visibilitychange', () => { if (document.hidden && S === 'play' && !paused) setPaused(true); });
 
 // ------------------------------------------------------------------ loop
@@ -1102,7 +1111,7 @@ function frame(now) {
 }
 playMusic('title');
 requestAnimationFrame(frame);
-window.__hw = { get S() { return S; }, startStage: n => { if (!P) P = newPlayer(); startStage(n); }, skipTo: (n) => { if (!P) P = newPlayer(); startStage(n); stg.t = stg.len; } };
+window.__hw = { get S() { return S; }, get audio() { return AU.ctx ? AU.ctx.state : "none"; }, startStage: n => { if (!P) P = newPlayer(); startStage(n); }, skipTo: (n) => { if (!P) P = newPlayer(); startStage(n); stg.t = stg.len; } };
 })();
 </script>
 </body>
